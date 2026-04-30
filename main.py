@@ -13,7 +13,29 @@ class ImageRequest(BaseModel):
     image_url: str
 
 
-def formatar_cpf(cpf: str) -> str:
+def cpf_valido(cpf: str) -> bool:
+    cpf = re.sub(r"\D", "", cpf)
+
+    if len(cpf) != 11:
+        return False
+
+    if cpf == cpf[0] * 11:
+        return False
+
+    soma = sum(int(cpf[i]) * (10 - i) for i in range(9))
+    digito1 = (soma * 10) % 11
+    if digito1 == 10:
+        digito1 = 0
+
+    soma = sum(int(cpf[i]) * (11 - i) for i in range(10))
+    digito2 = (soma * 10) % 11
+    if digito2 == 10:
+        digito2 = 0
+
+    return digito1 == int(cpf[9]) and digito2 == int(cpf[10])
+
+
+def formatar_cpf(cpf: str):
     cpf = re.sub(r"\D", "", cpf)
 
     if len(cpf) != 11:
@@ -22,23 +44,29 @@ def formatar_cpf(cpf: str) -> str:
     return f"{cpf[:3]}.{cpf[3:6]}.{cpf[6:9]}-{cpf[9:]}"
 
 
+def normalizar_texto(texto: str) -> str:
+    texto = texto.replace("\n", " ")
+    texto = re.sub(r"\s+", " ", texto)
+    return texto.strip()
+
+
 def extrair_cpf(texto: str):
-    texto_limpo = texto.replace("\n", " ")
-    texto_limpo = re.sub(r"\s+", " ", texto_limpo)
+    texto_limpo = normalizar_texto(texto)
 
-    # CPF formatado ou sem pontuação
-    padroes = [
-        r"\d{3}\.\d{3}\.\d{3}-\d{2}",
-        r"\d{3}\s*\d{3}\s*\d{3}\s*\d{2}",
-        r"\d{11}"
-    ]
+    # Regra principal:
+    # aceitar SOMENTE CPF formatado, perto da palavra CPF.
+    # Exemplo aceito: CPF 037.662.472-80
+    match = re.search(
+        r"CPF.{0,120}?(\d{3}\.\d{3}\.\d{3}-\d{2})",
+        texto_limpo,
+        re.IGNORECASE
+    )
 
-    for padrao in padroes:
-        encontrados = re.findall(padrao, texto_limpo)
-        for item in encontrados:
-            cpf = formatar_cpf(item)
-            if cpf:
-                return cpf
+    if match:
+        candidato = match.group(1)
+
+        if cpf_valido(candidato):
+            return candidato
 
     return None
 
@@ -48,34 +76,26 @@ def preparar_variacoes(image: Image.Image):
 
     variacoes = []
 
-    # Testa rotações porque fotos de documento podem vir de lado
     for angulo in [0, 90, 180, 270]:
         img = image.rotate(angulo, expand=True)
 
-        # aumenta imagem
         w, h = img.size
         img = img.resize((w * 2, h * 2))
 
-        # original ampliada
         variacoes.append(img)
 
-        # escala de cinza
         gray = ImageOps.grayscale(img)
         variacoes.append(gray)
 
-        # contraste
         contrast = ImageEnhance.Contrast(gray).enhance(2.5)
         variacoes.append(contrast)
 
-        # nitidez
         sharp = contrast.filter(ImageFilter.SHARPEN)
         variacoes.append(sharp)
 
-        # binarização clara
         binary_150 = sharp.point(lambda p: 255 if p > 150 else 0)
         variacoes.append(binary_150)
 
-        # binarização mais forte
         binary_120 = sharp.point(lambda p: 255 if p > 120 else 0)
         variacoes.append(binary_120)
 
@@ -105,11 +125,12 @@ def fazer_ocr_para_cpf(image: Image.Image):
                     textos.append(texto.strip())
 
                     cpf = extrair_cpf(texto)
+
                     if cpf:
                         return cpf, "\n\n".join(textos)
 
             except Exception:
-                pass
+                continue
 
     texto_final = "\n\n".join(textos)
     return None, texto_final
