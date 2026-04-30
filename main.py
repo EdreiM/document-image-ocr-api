@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageOps, ImageEnhance
 from io import BytesIO
 import re
 
@@ -23,55 +23,112 @@ def formatar_cpf(cpf: str) -> str:
 
 
 def extrair_cpf(texto: str):
-    padrao_formatado = r"\d{3}\.\d{3}\.\d{3}-\d{2}"
-    encontrado = re.search(padrao_formatado, texto)
+    encontrado = re.search(r"\d{3}\.?\d{3}\.?\d{3}-?\d{2}", texto)
 
     if encontrado:
-        return encontrado.group(0)
-
-    apenas_numeros = re.sub(r"\D", "", texto)
-
-    possiveis = re.findall(r"\d{11}", apenas_numeros)
-
-    for cpf in possiveis:
-        return formatar_cpf(cpf)
+        return formatar_cpf(encontrado.group(0))
 
     return None
 
 
-def classificar_documento(texto: str):
-    texto_upper = texto.upper()
+def normalizar_texto(texto: str) -> str:
+    texto = texto.upper()
+    texto = texto.replace("Á", "A").replace("À", "A").replace("Ã", "A").replace("Â", "A")
+    texto = texto.replace("É", "E").replace("Ê", "E")
+    texto = texto.replace("Í", "I")
+    texto = texto.replace("Ó", "O").replace("Õ", "O").replace("Ô", "O")
+    texto = texto.replace("Ú", "U")
+    texto = texto.replace("Ç", "C")
+    return texto
 
-    palavras_documento = [
-        "CPF",
-        "RG",
-        "CARTEIRA NACIONAL DE HABILITAÇÃO",
-        "CNH",
-        "IDENTIDADE",
-        "REPÚBLICA FEDERATIVA DO BRASIL",
-        "NOME",
-        "DATA DE NASCIMENTO",
+
+def classificar_documento(texto: str):
+    t = normalizar_texto(texto)
+
+    palavras_cnh = [
+        "CARTEIRA NACIONAL",
+        "HABILITACAO",
+        "DRIVER LICENSE",
+        "PERMISO",
+        "CATEGORIA",
         "VALIDADE",
-        "DOC IDENTIDADE",
-        "ÓRGÃO EMISSOR",
+        "DETRAN",
+        "SENATRAN",
+        "RENACH",
     ]
 
-    pontos = 0
+    palavras_doc = [
+        "CPF",
+        "RG",
+        "IDENTIDADE",
+        "REPUBLICA FEDERATIVA",
+        "NOME",
+        "NASCIMENTO",
+        "FILIACAO",
+        "DOC IDENTIDADE",
+        "ORGAO EMISSOR",
+    ]
 
-    for palavra in palavras_documento:
-        if palavra in texto_upper:
-            pontos += 1
+    pontos_cnh = sum(1 for p in palavras_cnh if p in t)
+    pontos_doc = sum(1 for p in palavras_doc if p in t)
 
-    if "CARTEIRA NACIONAL DE HABILITAÇÃO" in texto_upper or "CNH" in texto_upper:
+    if pontos_cnh >= 2:
         return "cnh"
 
-    if "CPF" in texto_upper or "IDENTIDADE" in texto_upper or "RG" in texto_upper:
+    if pontos_doc >= 2:
         return "documento_identidade"
 
-    if pontos >= 2:
+    if pontos_cnh + pontos_doc >= 2:
         return "documento_possivel"
 
     return "imagem_invalida"
+
+
+def preparar_imagem(image: Image.Image) -> list[Image.Image]:
+    image = image.convert("RGB")
+
+    # Corrige orientação EXIF, comum em foto de celular
+    image = ImageOps.exif_transpose(image)
+
+    imagens = []
+
+    # Versão original aumentada
+    w, h = image.size
+    scale = 2
+    img_grande = image.resize((w * scale, h * scale))
+    imagens.append(img_grande)
+
+    # Cinza + contraste
+    gray = ImageOps.grayscale(img_grande)
+    contraste = ImageEnhance.Contrast(gray).enhance(2.0)
+    imagens.append(contraste)
+
+    # Binarizada
+    binaria = contraste.point(lambda p: 255 if p > 150 else 0)
+    imagens.append(binaria)
+
+    return imagens
+
+
+def fazer_ocr(image: Image.Image) -> str:
+    textos = []
+
+    configs = [
+        "--oem 3 --psm 6",
+        "--oem 3 --psm 11",
+        "--oem 3 --psm 12",
+    ]
+
+    for img in preparar_imagem(image):
+        for config in configs:
+            try:
+                texto = pytesseract.image_to_string(img, lang="por", config=config)
+                if texto.strip():
+                    textos.append(texto.strip())
+            except Exception:
+                pass
+
+    return "\n\n".join(textos).strip()
 
 
 @app.get("/")
@@ -85,19 +142,21 @@ def home():
 @app.post("/ler-imagem")
 def ler_imagem(payload: ImageRequest):
     try:
-        response = requests.get(payload.image_url, timeout=20)
+        response = requests.get(payload.image_url, timeout=30)
 
         if response.status_code != 200:
             raise HTTPException(status_code=400, detail="Nao foi possivel baixar a imagem")
 
         image = Image.open(BytesIO(response.content))
 
-        texto = pytesseract.image_to_string(image, lang="por")
-
-        texto_limpo = texto.strip()
+        texto_limpo = fazer_ocr(image)
 
         cpf = extrair_cpf(texto_limpo)
         tipo = classificar_documento(texto_limpo)
+
+        # Se achou CPF, aumenta confiança de que é documento
+        if cpf and tipo == "imagem_invalida":
+            tipo = "documento_possivel"
 
         documento_valido = tipo != "imagem_invalida"
 
