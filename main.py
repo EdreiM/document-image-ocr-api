@@ -166,21 +166,19 @@ def ler_imagem(payload: ImageRequest):
 
         image = Image.open(BytesIO(response.content))
 
-        cpf, texto_ocr = fazer_ocr_para_cpf(image)
+        cpf, _ = fazer_ocr_para_cpf(image)
 
         if cpf:
             return {
                 "cpf": cpf,
                 "encontrado": True,
-                "mensagem": "cpf encontrado",
-                "texto_completo": texto_ocr[:3000]
+                "mensagem": "cpf encontrado"
             }
 
         return {
             "cpf": None,
             "encontrado": False,
-            "mensagem": "cpf não encontrado",
-            "texto_completo": texto_ocr[:3000]
+            "mensagem": "cpf não encontrado"
         }
 
     except Exception as e:
