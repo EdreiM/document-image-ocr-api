@@ -23,10 +23,17 @@ def formatar_cpf(cpf: str) -> str:
 
 
 def extrair_cpf(texto: str):
-    encontrado = re.search(r"\d{3}\.?\d{3}\.?\d{3}-?\d{2}", texto)
+    texto_limpo = texto.replace("\n", " ")
+    texto_limpo = re.sub(r"\s+", " ", texto_limpo)
 
-    if encontrado:
-        return formatar_cpf(encontrado.group(0))
+    match = re.search(
+        r"CPF.{0,100}?(\d{3}\.?\s*\d{3}\.?\s*\d{3}-?\s*\d{2})",
+        texto_limpo,
+        re.IGNORECASE
+    )
+
+    if match:
+        return formatar_cpf(match.group(1))
 
     return None
 
