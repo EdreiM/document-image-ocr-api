@@ -51,11 +51,12 @@ def normalizar_texto(texto: str) -> str:
 
 
 def extrair_cpf(texto: str):
-    texto_limpo = normalizar_texto(texto)
+    texto_limpo = texto.replace("\n", " ")
+    texto_limpo = re.sub(r"\s+", " ", texto_limpo)
 
-    # Regra principal:
-    # aceitar SOMENTE CPF formatado, perto da palavra CPF.
-    # Exemplo aceito: CPF 037.662.472-80
+    # -------------------------
+    # 1. PRIORIDADE: CPF perto da palavra CPF
+    # -------------------------
     match = re.search(
         r"CPF.{0,120}?(\d{3}\.\d{3}\.\d{3}-\d{2})",
         texto_limpo,
@@ -64,9 +65,17 @@ def extrair_cpf(texto: str):
 
     if match:
         candidato = match.group(1)
-
         if cpf_valido(candidato):
             return candidato
+
+    # -------------------------
+    # 2. FALLBACK: qualquer CPF formatado válido
+    # -------------------------
+    possiveis = re.findall(r"\d{3}\.\d{3}\.\d{3}-\d{2}", texto_limpo)
+
+    for cpf in possiveis:
+        if cpf_valido(cpf):
+            return cpf
 
     return None
 
