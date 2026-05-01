@@ -54,31 +54,21 @@ def extrair_cpf(texto: str):
     texto_limpo = texto.replace("\n", " ")
     texto_limpo = re.sub(r"\s+", " ", texto_limpo)
 
-    # -------------------------
-    # 1. PRIORIDADE: CPF perto da palavra CPF
-    # -------------------------
-    match = re.search(
-        r"CPF.{0,120}?(\d{3}\.\d{3}\.\d{3}-\d{2})",
-        texto_limpo,
-        re.IGNORECASE
-    )
+    padroes = [
+        r"(\d{3}\s*[\.,]\s*\d{3}\s*[\.,]\s*\d{3}\s*[-–—]\s*\d{2})",
+        r"(\d{3}\s+\d{3}\s+\d{3}\s+[-–—]?\s*\d{2})",
+    ]
 
-    if match:
-        candidato = match.group(1)
-        if cpf_valido(candidato):
-            return candidato
+    for padrao in padroes:
+        encontrados = re.findall(padrao, texto_limpo)
 
-    # -------------------------
-    # 2. FALLBACK: qualquer CPF formatado válido
-    # -------------------------
-    possiveis = re.findall(r"\d{3}\.\d{3}\.\d{3}-\d{2}", texto_limpo)
+        for candidato in encontrados:
+            cpf_formatado = formatar_cpf(candidato)
 
-    for cpf in possiveis:
-        if cpf_valido(cpf):
-            return cpf
+            if cpf_formatado and cpf_valido(cpf_formatado):
+                return cpf_formatado
 
     return None
-
 
 def preparar_variacoes(image: Image.Image):
     image = ImageOps.exif_transpose(image).convert("RGB")
@@ -91,34 +81,32 @@ def preparar_variacoes(image: Image.Image):
         w, h = img.size
         img = img.resize((w * 2, h * 2))
 
-        variacoes.append(img)
-
         gray = ImageOps.grayscale(img)
-        variacoes.append(gray)
-
         contrast = ImageEnhance.Contrast(gray).enhance(2.5)
-        variacoes.append(contrast)
-
         sharp = contrast.filter(ImageFilter.SHARPEN)
+
         variacoes.append(sharp)
 
-        binary_150 = sharp.point(lambda p: 255 if p > 150 else 0)
-        variacoes.append(binary_150)
+        # Recortes para tentar isolar áreas pequenas do documento
+        w, h = sharp.size
 
-        binary_120 = sharp.point(lambda p: 255 if p > 120 else 0)
-        variacoes.append(binary_120)
+        recortes = [
+            sharp.crop((0, 0, w, h)),  # imagem inteira
+            sharp.crop((0, int(h * 0.25), w, int(h * 0.75))),  # faixa central
+            sharp.crop((int(w * 0.20), int(h * 0.20), int(w * 0.80), int(h * 0.80))),  # centro
+            sharp.crop((0, int(h * 0.40), w, h)),  # metade inferior
+            sharp.crop((int(w * 0.25), int(h * 0.35), int(w * 0.75), int(h * 0.90))),  # centro inferior
+        ]
+
+        variacoes.extend(recortes)
 
     return variacoes
 
 
 def fazer_ocr_para_cpf(image: Image.Image):
-    textos = []
-
     configs = [
-        "--oem 3 --psm 6",
-        "--oem 3 --psm 11",
-        "--oem 3 --psm 12",
-        "--oem 3 --psm 4",
+        "--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.,-–— ",
+        "--oem 3 --psm 11 -c tessedit_char_whitelist=0123456789.,-–— ",
     ]
 
     for img in preparar_variacoes(image):
@@ -130,20 +118,15 @@ def fazer_ocr_para_cpf(image: Image.Image):
                     config=config
                 )
 
-                if texto.strip():
-                    textos.append(texto.strip())
+                cpf = extrair_cpf(texto)
 
-                    cpf = extrair_cpf(texto)
-
-                    if cpf:
-                        return cpf, "\n\n".join(textos)
+                if cpf:
+                    return cpf, ""
 
             except Exception:
                 continue
 
-    texto_final = "\n\n".join(textos)
-    return None, texto_final
-
+    return None, ""
 
 @app.get("/")
 def home():
